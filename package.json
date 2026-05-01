@@ -1,0 +1,37 @@
+{
+  "name": "@seyacat/closer-click-identity",
+  "version": "0.1.0",
+  "description": "Identidad y rating de usuarios compartidos entre apps de Closer Click (vault iframe + postMessage)",
+  "type": "module",
+  "main": "src/index.js",
+  "module": "src/index.js",
+  "types": "src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "import": "./src/index.js"
+    }
+  },
+  "files": [
+    "src",
+    "vault",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "keywords": [
+    "identity",
+    "rating",
+    "closer-click",
+    "vault",
+    "cross-origin"
+  ],
+  "author": "seyacat",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/seyacat/closer-click-identity.git"
+  }
+}
