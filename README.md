@@ -28,7 +28,7 @@ npm install @seyacat/closer-click-identity
 import { Identity } from '@seyacat/closer-click-identity'
 
 const id = await Identity.connect({
-  vaultUrl: 'https://id.closer.click/'   // por defecto
+  vaultUrl: 'https://seyacat.github.io/closer-click-identity/'   // por defecto
 })
 
 console.log('my publickey JWK:', id.me.publickey)
@@ -63,7 +63,7 @@ Inicializa el iframe y resuelve cuando el vault está listo.
 
 | opción       | tipo     | default                       |
 |--------------|----------|-------------------------------|
-| `vaultUrl`   | string   | `https://id.closer.click/`    |
+| `vaultUrl`   | string   | `https://seyacat.github.io/closer-click-identity/` |
 | `timeoutMs`  | number   | `5000`                        |
 
 ### Identidad propia

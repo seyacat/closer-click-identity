@@ -7,7 +7,7 @@
  * use this library share identity even across different origins.
  */
 
-const DEFAULT_VAULT_URL = 'https://id.closer.click/'
+const DEFAULT_VAULT_URL = 'https://seyacat.github.io/closer-click-identity/'
 
 let singleton = null
 
