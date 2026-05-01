@@ -1,4 +1,4 @@
-# @seyacat/closer-click-identity
+# @gatoseya/closer-click-identity
 
 Identidad de usuario y rating de peers compartidos entre las apps de Closer Click. Funciona aunque las apps vivan en orígenes distintos: usa un **vault iframe** alojado en un origin estable que guarda la información en su propio `localStorage` y expone una API por `postMessage`.
 
@@ -19,13 +19,13 @@ Como todas las apps cargan el vault desde el mismo origin, comparten el mismo `l
 ## Instalación
 
 ```bash
-npm install @seyacat/closer-click-identity
+npm install @gatoseya/closer-click-identity
 ```
 
 ## Uso
 
 ```js
-import { Identity } from '@seyacat/closer-click-identity'
+import { Identity } from '@gatoseya/closer-click-identity'
 
 const id = await Identity.connect({
   vaultUrl: 'https://seyacat.github.io/closer-click-identity/'   // por defecto
