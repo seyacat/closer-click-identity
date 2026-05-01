@@ -28,7 +28,7 @@ npm install @gatoseya/closer-click-identity
 import { Identity } from '@gatoseya/closer-click-identity'
 
 const id = await Identity.connect({
-  vaultUrl: 'https://seyacat.github.io/closer-click-identity/'   // por defecto
+  vaultUrl: 'https://id.closer.click/'   // por defecto
 })
 
 console.log('my publickey JWK:', id.me.publickey)
@@ -52,7 +52,7 @@ const peers = await id.listPeers()
 Para que distintas apps compartan datos, todas deben apuntar al **mismo `vaultUrl`**. La carpeta `vault/` de este paquete es un sitio estático (HTML + JS) listo para subir a:
 
 - Un dominio dedicado: `id.closer.click`
-- O temporalmente: `https://seyacat.github.io/closer-click-identity/vault/`
+- O temporalmente: `https://id.closer.click/vault/`
 
 Importante: subir vía HTTPS y configurar `Content-Security-Policy: frame-ancestors *` (o lista de orígenes permitidos) para permitir que las apps lo embeban.
 
@@ -63,7 +63,7 @@ Inicializa el iframe y resuelve cuando el vault está listo.
 
 | opción       | tipo     | default                       |
 |--------------|----------|-------------------------------|
-| `vaultUrl`   | string   | `https://seyacat.github.io/closer-click-identity/` |
+| `vaultUrl`   | string   | `https://id.closer.click/` |
 | `timeoutMs`  | number   | `5000`                        |
 
 ### Identidad propia
