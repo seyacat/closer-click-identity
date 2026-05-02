@@ -200,9 +200,107 @@ const handlers = {
 
   async setRating ({ publickey, rating, notes }) {
     const r = Math.max(0, Math.min(5, Number(rating) || 0))
-    const patch = { rating: r }
-    if (typeof notes === 'string') patch.notes = notes.slice(0, 500)
-    return upsertPeer(publickey, patch)
+    const safeNotes = typeof notes === 'string' ? notes.slice(0, 500) : ''
+    const issuedAt = Date.now()
+    const envelope = {
+      subject: publickey,
+      rating: r,
+      notes: safeNotes,
+      ratedBy: publickeyJwkStr,
+      issuedAt
+    }
+    const sigBytes = new TextEncoder().encode(canonicalStringify(envelope))
+    const signature = await signBytes(keypair.privateKey, sigBytes)
+    const myRating = { ...envelope, signature }
+    return upsertPeer(publickey, { myRating, rating: r, notes: safeNotes })
+  },
+
+  /**
+   * Merge endorsements about a subject from third parties.
+   * Each endorsement is a signed envelope; we verify it before storing,
+   * dedupe by ratedBy keeping the newest issuedAt, and cap to 50 per subject.
+   */
+  async mergeEndorsements ({ subject, endorsements, askerPubkey }) {
+    if (!subject || !Array.isArray(endorsements)) {
+      return { merged: 0, total: 0 }
+    }
+    const peers = loadPeers()
+    const existing = peers[subject] || { publickey: subject, firstSeen: Date.now() }
+    const current = Array.isArray(existing.endorsements) ? existing.endorsements : []
+    const byRater = new Map()
+    for (const e of current) {
+      if (e?.ratedBy) byRater.set(e.ratedBy, e)
+    }
+    let merged = 0
+    for (const env of endorsements) {
+      if (!env || typeof env !== 'object') continue
+      const { subject: s, rating, notes, ratedBy, issuedAt, signature } = env
+      if (s !== subject) continue
+      if (typeof ratedBy !== 'string' || !ratedBy) continue
+      if (ratedBy === publickeyJwkStr) continue // we have our own as myRating
+      if (typeof signature !== 'string') continue
+      if (typeof rating !== 'number' || rating < 0 || rating > 5) continue
+      // Reject older or equal duplicates
+      const prev = byRater.get(ratedBy)
+      if (prev && (prev.issuedAt || 0) >= (issuedAt || 0)) continue
+      // Verify signature
+      const canonical = canonicalStringify({
+        subject: s,
+        rating,
+        notes: typeof notes === 'string' ? notes : '',
+        ratedBy,
+        issuedAt
+      })
+      const ok = await verifyBytes(ratedBy, new TextEncoder().encode(canonical), signature)
+      if (!ok) continue
+      byRater.set(ratedBy, env)
+      merged++
+    }
+    // Cap to 50 most recent
+    const all = Array.from(byRater.values()).sort((a, b) => (b.issuedAt || 0) - (a.issuedAt || 0)).slice(0, 50)
+    peers[subject] = { ...existing, publickey: subject, endorsements: all, lastSeen: Date.now() }
+    // Track query stats: which asker probed for this subject
+    if (typeof askerPubkey === 'string' && askerPubkey && askerPubkey !== publickeyJwkStr) {
+      const askerRecord = peers[askerPubkey] || { publickey: askerPubkey, firstSeen: Date.now() }
+      const stats = askerRecord.queryStats || { queriesMade: 0, queriesKnown: 0 }
+      stats.queriesMade = (stats.queriesMade || 0) + 1
+      // We "knew" the subject if we have either myRating or any endorsement for it
+      const knewIt = !!(existing.myRating) || (Array.isArray(existing.endorsements) && existing.endorsements.length > 0)
+      if (knewIt) stats.queriesKnown = (stats.queriesKnown || 0) + 1
+      peers[askerPubkey] = { ...askerRecord, queryStats: stats, lastSeen: askerRecord.lastSeen || Date.now() }
+    }
+    savePeers(peers)
+    return { merged, total: all.length }
+  },
+
+  /**
+   * Get my own rating + collected endorsements for a subject. Used when
+   * the host app needs to answer a RATING_QUERY from another peer.
+   */
+  async getRatingsForSubject ({ subject }) {
+    const peers = loadPeers()
+    const r = peers[subject]
+    return {
+      mine: r?.myRating || null,
+      endorsements: Array.isArray(r?.endorsements) ? r.endorsements : []
+    }
+  },
+
+  /** Tally that an asker queried us about a subject (for suspicion stats). */
+  async recordQuery ({ askerPubkey, subject }) {
+    if (!askerPubkey || askerPubkey === publickeyJwkStr) return null
+    const peers = loadPeers()
+    const askerRecord = peers[askerPubkey] || { publickey: askerPubkey, firstSeen: Date.now() }
+    const stats = askerRecord.queryStats || { queriesMade: 0, queriesKnown: 0 }
+    stats.queriesMade = (stats.queriesMade || 0) + 1
+    if (subject) {
+      const subjectRec = peers[subject]
+      const knewIt = !!(subjectRec?.myRating) || (Array.isArray(subjectRec?.endorsements) && subjectRec.endorsements.length > 0)
+      if (knewIt) stats.queriesKnown = (stats.queriesKnown || 0) + 1
+    }
+    peers[askerPubkey] = { ...askerRecord, queryStats: stats, lastSeen: askerRecord.lastSeen || Date.now() }
+    savePeers(peers)
+    return peers[askerPubkey]
   },
 
   async listPeers () {

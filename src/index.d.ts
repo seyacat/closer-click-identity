@@ -8,11 +8,28 @@ export interface Me {
   nickname?: string
 }
 
+export interface SignedRating {
+  subject: string
+  rating: number
+  notes: string
+  ratedBy: string
+  issuedAt: number
+  signature: string
+}
+
+export interface QueryStats {
+  queriesMade: number
+  queriesKnown: number
+}
+
 export interface PeerInfo {
   publickey: string
   nickname?: string
   rating?: number
   notes?: string
+  myRating?: SignedRating | null
+  endorsements?: SignedRating[]
+  queryStats?: QueryStats
   firstSeen?: number
   lastSeen?: number
 }
@@ -58,6 +75,15 @@ export class Identity {
   listPeers (): Promise<PeerInfo[]>
   forgetPeer (publickey: string): Promise<void>
   setMyNickname (nickname: string): Promise<{ me: Me }>
+  mergeEndorsements (
+    subject: string,
+    endorsements: SignedRating[],
+    askerPubkey?: string
+  ): Promise<{ merged: number; total: number }>
+  getRatingsForSubject (
+    subject: string
+  ): Promise<{ mine: SignedRating | null; endorsements: SignedRating[] }>
+  recordQuery (askerPubkey: string, subject?: string): Promise<PeerInfo | null>
   exportIdentity (): Promise<IdentityExport>
   importIdentity (blob: IdentityExport | Record<string, any>): Promise<{ me: Me }>
   on (event: 'peer_updated' | 'me_updated', handler: (payload: any) => void): () => void

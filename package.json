@@ -1,6 +1,6 @@
 {
   "name": "@gatoseya/closer-click-identity",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Identidad y rating de usuarios compartidos entre apps de Closer Click (vault iframe + postMessage)",
   "type": "module",
   "main": "src/index.js",

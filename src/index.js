@@ -138,6 +138,29 @@ export class Identity {
     return this._call('forgetPeer', { publickey })
   }
 
+  /**
+   * Merge endorsements (signed ratings from third parties) about a subject
+   * into the local peer book. Returns { merged, total }.
+   */
+  async mergeEndorsements (subject, endorsements, askerPubkey) {
+    return this._call('mergeEndorsements', { subject, endorsements, askerPubkey })
+  }
+
+  /**
+   * Return what this vault knows about a subject for the purpose of
+   * answering a RATING_QUERY: { mine: signedEnvelopeOrNull, endorsements: [] }.
+   */
+  async getRatingsForSubject (subject) {
+    return this._call('getRatingsForSubject', { subject })
+  }
+
+  /**
+   * Record that a peer asked us about a subject. Used for suspicion stats.
+   */
+  async recordQuery (askerPubkey, subject) {
+    return this._call('recordQuery', { askerPubkey, subject })
+  }
+
   /** Update own nickname (broadcast to the vault, not to other apps automatically) */
   async setMyNickname (nickname) {
     const result = await this._call('setMyNickname', { nickname })
