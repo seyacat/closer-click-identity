@@ -219,6 +219,46 @@ const handlers = {
     const me = { publickey: publickeyJwkStr, nickname: String(nickname || '').slice(0, 40) }
     saveMe(me)
     return { me }
+  },
+
+  async exportIdentity () {
+    const raw = localStorage.getItem(KEY_STORAGE)
+    if (!raw) throw new Error('No keypair to export')
+    const keys = JSON.parse(raw)
+    return {
+      version: 1,
+      privateJwk: keys.privateJwk,
+      publicJwk: keys.publicJwk,
+      me: loadMe(),
+      peers: loadPeers(),
+      exportedAt: new Date().toISOString()
+    }
+  },
+
+  async importIdentity ({ privateJwk, publicJwk, me, peers }) {
+    if (!privateJwk || !publicJwk) throw new Error('privateJwk and publicJwk required')
+    // Validate by importing
+    await crypto.subtle.importKey(
+      'jwk', privateJwk,
+      { name: 'ECDSA', namedCurve: 'P-256' },
+      true, ['sign']
+    )
+    await crypto.subtle.importKey(
+      'jwk', publicJwk,
+      { name: 'ECDSA', namedCurve: 'P-256' },
+      true, ['verify']
+    )
+    localStorage.setItem(KEY_STORAGE, JSON.stringify({ privateJwk, publicJwk }))
+    if (peers && typeof peers === 'object') savePeers(peers)
+    const newPubKeyStr = JSON.stringify(publicJwk)
+    const newMe = me && me.publickey === newPubKeyStr
+      ? me
+      : { publickey: newPubKeyStr, ...(me?.nickname ? { nickname: me.nickname } : {}) }
+    saveMe(newMe)
+    // Reload runtime keypair
+    keypair = await loadOrCreateKeypair()
+    publickeyJwkStr = JSON.stringify(keypair.publicJwk)
+    return { me: newMe }
   }
 }
 

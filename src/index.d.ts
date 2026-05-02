@@ -33,6 +33,15 @@ export interface VerifyResult {
   peer?: PeerInfo
 }
 
+export interface IdentityExport {
+  version: number
+  privateJwk: Record<string, any>
+  publicJwk: Record<string, any>
+  me: Me | null
+  peers: Record<string, PeerInfo>
+  exportedAt: string
+}
+
 export class Identity {
   static connect (options?: IdentityOptions): Promise<Identity>
   static current (): Identity | null
@@ -49,5 +58,7 @@ export class Identity {
   listPeers (): Promise<PeerInfo[]>
   forgetPeer (publickey: string): Promise<void>
   setMyNickname (nickname: string): Promise<{ me: Me }>
+  exportIdentity (): Promise<IdentityExport>
+  importIdentity (blob: IdentityExport | Record<string, any>): Promise<{ me: Me }>
   on (event: 'peer_updated' | 'me_updated', handler: (payload: any) => void): () => void
 }

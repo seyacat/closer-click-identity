@@ -145,6 +145,25 @@ export class Identity {
     return result
   }
 
+  /**
+   * Export the full identity (private key + peer book) as a JSON-serializable object.
+   * The blob can be saved to a file by the host app and re-imported later.
+   * The private key is sensitive — handle accordingly.
+   */
+  async exportIdentity () {
+    return this._call('exportIdentity')
+  }
+
+  /**
+   * Import a previously exported identity blob, replacing the current one.
+   * Throws if the blob is malformed or keys are invalid.
+   */
+  async importIdentity (blob) {
+    const result = await this._call('importIdentity', blob)
+    if (result?.me) this._me = result.me
+    return result
+  }
+
   on (event, handler) {
     if (!this._listeners) this._listeners = new Map()
     if (!this._listeners.has(event)) this._listeners.set(event, new Set())
