@@ -7,6 +7,7 @@
  */
 
 const KEY_STORAGE = 'closer-click.identity.keypair'
+const ENC_KEY_STORAGE = 'closer-click.identity.enc-keypair'
 const ME_STORAGE  = 'closer-click.identity.me'
 const PEERS_STORAGE = 'closer-click.identity.peers'
 const NONCE_STORAGE = 'closer-click.identity.nonces' // recently signed nonces (replay window)
@@ -60,6 +61,59 @@ async function loadOrCreateKeypair () {
   const publicJwk = await crypto.subtle.exportKey('jwk', pair.publicKey)
   localStorage.setItem(KEY_STORAGE, JSON.stringify({ privateJwk, publicJwk }))
   return { privateKey: pair.privateKey, publicKey: pair.publicKey, publicJwk }
+}
+
+/**
+ * Keypair ECDH P-256 (separado del ECDSA) usado para encripción E2E.
+ * Las pubkeys se anuncian en el handshake; la priv nunca sale del vault.
+ */
+async function loadOrCreateEncKeypair () {
+  const raw = localStorage.getItem(ENC_KEY_STORAGE)
+  if (raw) {
+    try {
+      const { privateJwk, publicJwk } = JSON.parse(raw)
+      const privateKey = await crypto.subtle.importKey(
+        'jwk', privateJwk,
+        { name: 'ECDH', namedCurve: 'P-256' },
+        true, ['deriveBits', 'deriveKey']
+      )
+      const publicKey = await crypto.subtle.importKey(
+        'jwk', publicJwk,
+        { name: 'ECDH', namedCurve: 'P-256' },
+        true, []
+      )
+      return { privateKey, publicKey, publicJwk }
+    } catch (_) {}
+  }
+  const pair = await crypto.subtle.generateKey(
+    { name: 'ECDH', namedCurve: 'P-256' },
+    true, ['deriveBits', 'deriveKey']
+  )
+  const privateJwk = await crypto.subtle.exportKey('jwk', pair.privateKey)
+  const publicJwk = await crypto.subtle.exportKey('jwk', pair.publicKey)
+  localStorage.setItem(ENC_KEY_STORAGE, JSON.stringify({ privateJwk, publicJwk }))
+  return { privateKey: pair.privateKey, publicKey: pair.publicKey, publicJwk }
+}
+
+/** Importar una pubkey ECDH (JWK string) de un peer. */
+async function importPeerEncPubkey (jwkStr) {
+  const jwk = typeof jwkStr === 'string' ? JSON.parse(jwkStr) : jwkStr
+  return crypto.subtle.importKey(
+    'jwk', jwk,
+    { name: 'ECDH', namedCurve: 'P-256' },
+    true, []
+  )
+}
+
+/** Derivar clave compartida AES-256-GCM (no extractable) entre miPriv + suPub. */
+async function deriveSharedAesKey (myPriv, peerPub) {
+  return crypto.subtle.deriveKey(
+    { name: 'ECDH', public: peerPub },
+    myPriv,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt']
+  )
 }
 
 async function signBytes (privateKey, bytes) {
@@ -164,6 +218,8 @@ function saveMe (me) {
 
 let keypair = null
 let publickeyJwkStr = null
+let encKeypair = null
+let encPublickeyJwkStr = null
 
 const handlers = {
   async makeChallenge () {
@@ -176,17 +232,29 @@ const handlers = {
     if (!nonce || typeof nonce !== 'string') throw new Error('nonce required')
     const bytes = new TextEncoder().encode(nonce)
     const signature = await signBytes(keypair.privateKey, bytes)
-    return { nonce, publickey: publickeyJwkStr, signature }
+    return {
+      nonce,
+      publickey: publickeyJwkStr,
+      encryptionPubkey: encPublickeyJwkStr,
+      signature
+    }
   },
 
-  async verifyResponse ({ nonce, publickey, signature }) {
+  async verifyResponse ({ nonce, publickey, signature, encryptionPubkey }) {
     if (!nonce || !publickey || !signature) return { ok: false }
     if (!isFreshNonce(nonce)) return { ok: false, reason: 'nonce expired or unknown' }
     const bytes = new TextEncoder().encode(nonce)
     const ok = await verifyBytes(publickey, bytes, signature)
     if (!ok) return { ok: false }
-    const peer = upsertPeer(publickey, {})
-    return { ok: true, publickey, peer }
+    // Persistir el encryptionPubkey anunciado (no firmado, pero se entrega
+    // sobre el mismo canal verificado, así que el riesgo es aceptable y queda
+    // disponible para encripción E2E).
+    const patch = {}
+    if (typeof encryptionPubkey === 'string' && encryptionPubkey) {
+      patch.encryptionPubkey = encryptionPubkey
+    }
+    const peer = upsertPeer(publickey, patch)
+    return { ok: true, publickey, encryptionPubkey: encryptionPubkey || null, peer }
   },
 
   async getPeer ({ publickey }) {
@@ -314,28 +382,131 @@ const handlers = {
   },
 
   async setMyNickname ({ nickname }) {
-    const me = { publickey: publickeyJwkStr, nickname: String(nickname || '').slice(0, 40) }
+    const me = {
+      publickey: publickeyJwkStr,
+      encryptionPubkey: encPublickeyJwkStr,
+      nickname: String(nickname || '').slice(0, 40)
+    }
     saveMe(me)
     return { me }
+  },
+
+  async getEncryptionPubkey () {
+    return encPublickeyJwkStr
+  },
+
+  /**
+   * Cifrar plaintext para una lista de destinatarios usando ECDH+AES-GCM.
+   *
+   * @param {{ recipients: Array<{token,encryptionPubkey}>, plaintext: string }} args
+   * @returns {{ v:1, iv: string, ct: string, wrap: Record<string, {iv:string, ct:string}> }}
+   */
+  async encrypt ({ recipients, plaintext }) {
+    if (!Array.isArray(recipients) || recipients.length === 0) {
+      throw new Error('recipients required')
+    }
+    if (typeof plaintext !== 'string') {
+      throw new Error('plaintext required')
+    }
+    // Clave simétrica efímera para este mensaje
+    const k = await crypto.subtle.generateKey(
+      { name: 'AES-GCM', length: 256 },
+      true,
+      ['encrypt', 'decrypt']
+    )
+    const kRaw = await crypto.subtle.exportKey('raw', k)
+    // Cipher del payload una sola vez
+    const iv = crypto.getRandomValues(new Uint8Array(12))
+    const ct = await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv },
+      k,
+      new TextEncoder().encode(plaintext)
+    )
+    // Envolver `k` para cada destinatario
+    const wrap = {}
+    for (const r of recipients) {
+      if (!r || !r.token || !r.encryptionPubkey) continue
+      try {
+        const peerPub = await importPeerEncPubkey(r.encryptionPubkey)
+        const sharedKey = await deriveSharedAesKey(encKeypair.privateKey, peerPub)
+        const wrapIv = crypto.getRandomValues(new Uint8Array(12))
+        const wrappedCt = await crypto.subtle.encrypt(
+          { name: 'AES-GCM', iv: wrapIv },
+          sharedKey,
+          kRaw
+        )
+        wrap[r.token] = {
+          iv: bufToBase64(wrapIv),
+          ct: bufToBase64(new Uint8Array(wrappedCt))
+        }
+      } catch (e) {
+        // Si falla un destinatario, lo omitimos del wrap (no podrá descifrar)
+      }
+    }
+    return {
+      v: 1,
+      iv: bufToBase64(iv),
+      ct: bufToBase64(new Uint8Array(ct)),
+      wrap
+    }
+  },
+
+  /**
+   * Descifrar un envelope dirigido a este vault.
+   *
+   * @param {{ senderEncryptionPubkey: string, myToken: string, envelope: object }} args
+   * @returns {{ plaintext: string }}
+   */
+  async decrypt ({ senderEncryptionPubkey, myToken, envelope }) {
+    if (!senderEncryptionPubkey) throw new Error('senderEncryptionPubkey required')
+    if (!myToken) throw new Error('myToken required')
+    if (!envelope || envelope.v !== 1) throw new Error('Unsupported envelope')
+    const myEntry = envelope.wrap && envelope.wrap[myToken]
+    if (!myEntry) throw new Error('No wrap entry for this recipient')
+
+    const senderPub = await importPeerEncPubkey(senderEncryptionPubkey)
+    const sharedKey = await deriveSharedAesKey(encKeypair.privateKey, senderPub)
+    const kRaw = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: base64ToBuf(myEntry.iv) },
+      sharedKey,
+      base64ToBuf(myEntry.ct)
+    )
+    const k = await crypto.subtle.importKey(
+      'raw',
+      kRaw,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['decrypt']
+    )
+    const ptBytes = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: base64ToBuf(envelope.iv) },
+      k,
+      base64ToBuf(envelope.ct)
+    )
+    return { plaintext: new TextDecoder().decode(ptBytes) }
   },
 
   async exportIdentity () {
     const raw = localStorage.getItem(KEY_STORAGE)
     if (!raw) throw new Error('No keypair to export')
     const keys = JSON.parse(raw)
+    const encRaw = localStorage.getItem(ENC_KEY_STORAGE)
+    const encKeys = encRaw ? JSON.parse(encRaw) : null
     return {
-      version: 1,
+      version: 2,
       privateJwk: keys.privateJwk,
       publicJwk: keys.publicJwk,
+      encPrivateJwk: encKeys?.privateJwk || null,
+      encPublicJwk: encKeys?.publicJwk || null,
       me: loadMe(),
       peers: loadPeers(),
       exportedAt: new Date().toISOString()
     }
   },
 
-  async importIdentity ({ privateJwk, publicJwk, me, peers }) {
+  async importIdentity ({ privateJwk, publicJwk, encPrivateJwk, encPublicJwk, me, peers }) {
     if (!privateJwk || !publicJwk) throw new Error('privateJwk and publicJwk required')
-    // Validate by importing
+    // Validar la signing keypair importando.
     await crypto.subtle.importKey(
       'jwk', privateJwk,
       { name: 'ECDSA', namedCurve: 'P-256' },
@@ -347,15 +518,46 @@ const handlers = {
       true, ['verify']
     )
     localStorage.setItem(KEY_STORAGE, JSON.stringify({ privateJwk, publicJwk }))
+
+    // Si el blob trae encryption keypair (export v2+), validar e importar.
+    // Si no (v1), generamos una nueva al rehidratar — el usuario perderá los
+    // mensajes E2E pasados pero conservará identidad+ratings.
+    if (encPrivateJwk && encPublicJwk) {
+      await crypto.subtle.importKey(
+        'jwk', encPrivateJwk,
+        { name: 'ECDH', namedCurve: 'P-256' },
+        true, ['deriveBits', 'deriveKey']
+      )
+      await crypto.subtle.importKey(
+        'jwk', encPublicJwk,
+        { name: 'ECDH', namedCurve: 'P-256' },
+        true, []
+      )
+      localStorage.setItem(ENC_KEY_STORAGE, JSON.stringify({
+        privateJwk: encPrivateJwk,
+        publicJwk: encPublicJwk
+      }))
+    } else {
+      localStorage.removeItem(ENC_KEY_STORAGE)
+    }
+
     if (peers && typeof peers === 'object') savePeers(peers)
-    const newPubKeyStr = JSON.stringify(publicJwk)
-    const newMe = me && me.publickey === newPubKeyStr
-      ? me
-      : { publickey: newPubKeyStr, ...(me?.nickname ? { nickname: me.nickname } : {}) }
-    saveMe(newMe)
-    // Reload runtime keypair
+
+    // Recargar keypairs en runtime
     keypair = await loadOrCreateKeypair()
     publickeyJwkStr = JSON.stringify(keypair.publicJwk)
+    encKeypair = await loadOrCreateEncKeypair()
+    encPublickeyJwkStr = JSON.stringify(encKeypair.publicJwk)
+
+    const newMe = me && me.publickey === publickeyJwkStr
+      ? { ...me, encryptionPubkey: encPublickeyJwkStr }
+      : {
+          publickey: publickeyJwkStr,
+          encryptionPubkey: encPublickeyJwkStr,
+          ...(me?.nickname ? { nickname: me.nickname } : {})
+        }
+    saveMe(newMe)
+
     return { me: newMe }
   }
 }
@@ -365,11 +567,21 @@ const handlers = {
 ;(async () => {
   keypair = await loadOrCreateKeypair()
   publickeyJwkStr = JSON.stringify(keypair.publicJwk)
+  encKeypair = await loadOrCreateEncKeypair()
+  encPublickeyJwkStr = JSON.stringify(encKeypair.publicJwk)
+
   const persistedMe = loadMe()
-  const me = persistedMe && persistedMe.publickey === publickeyJwkStr
-    ? persistedMe
-    : { publickey: publickeyJwkStr }
-  if (me !== persistedMe) saveMe(me)
+  let me
+  if (persistedMe && persistedMe.publickey === publickeyJwkStr) {
+    me = persistedMe
+    if (me.encryptionPubkey !== encPublickeyJwkStr) {
+      me = { ...me, encryptionPubkey: encPublickeyJwkStr }
+      saveMe(me)
+    }
+  } else {
+    me = { publickey: publickeyJwkStr, encryptionPubkey: encPublickeyJwkStr }
+    saveMe(me)
+  }
 
   window.addEventListener('message', async (event) => {
     const msg = event.data

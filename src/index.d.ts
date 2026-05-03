@@ -5,7 +5,20 @@ export interface IdentityOptions {
 
 export interface Me {
   publickey: string
+  encryptionPubkey?: string
   nickname?: string
+}
+
+export interface EnvelopeV1 {
+  v: 1
+  iv: string
+  ct: string
+  wrap: Record<string, { iv: string; ct: string }>
+}
+
+export interface EncryptRecipient {
+  token: string
+  encryptionPubkey: string
 }
 
 export interface SignedRating {
@@ -24,6 +37,7 @@ export interface QueryStats {
 
 export interface PeerInfo {
   publickey: string
+  encryptionPubkey?: string
   nickname?: string
   rating?: number
   notes?: string
@@ -41,12 +55,14 @@ export interface Challenge {
 export interface ChallengeResponse {
   nonce: string
   publickey: string
+  encryptionPubkey?: string
   signature: string
 }
 
 export interface VerifyResult {
   ok: boolean
   publickey?: string
+  encryptionPubkey?: string | null
   peer?: PeerInfo
 }
 
@@ -75,6 +91,13 @@ export class Identity {
   listPeers (): Promise<PeerInfo[]>
   forgetPeer (publickey: string): Promise<void>
   setMyNickname (nickname: string): Promise<{ me: Me }>
+  getEncryptionPubkey (): Promise<string>
+  encrypt (recipients: EncryptRecipient[], plaintext: string): Promise<EnvelopeV1>
+  decrypt (
+    senderEncryptionPubkey: string,
+    myToken: string,
+    envelope: EnvelopeV1
+  ): Promise<{ plaintext: string }>
   mergeEndorsements (
     subject: string,
     endorsements: SignedRating[],

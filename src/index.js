@@ -168,6 +168,31 @@ export class Identity {
     return result
   }
 
+  /** Pubkey ECDH (JWK string) propio para encripción. */
+  async getEncryptionPubkey () {
+    return this._call('getEncryptionPubkey')
+  }
+
+  /**
+   * Cifra `plaintext` para una lista de destinatarios usando ECDH+AES-GCM.
+   * @param {Array<{token:string, encryptionPubkey:string}>} recipients
+   * @param {string} plaintext
+   * @returns {Promise<Object>} Envelope { v, iv, ct, wrap }
+   */
+  async encrypt (recipients, plaintext) {
+    return this._call('encrypt', { recipients, plaintext })
+  }
+
+  /**
+   * Descifra un envelope dirigido a este vault.
+   * @param {string} senderEncryptionPubkey JWK string del emisor
+   * @param {string} myToken token efímero al que iba dirigido el wrap
+   * @param {Object} envelope
+   */
+  async decrypt (senderEncryptionPubkey, myToken, envelope) {
+    return this._call('decrypt', { senderEncryptionPubkey, myToken, envelope })
+  }
+
   /**
    * Export the full identity (private key + peer book) as a JSON-serializable object.
    * The blob can be saved to a file by the host app and re-imported later.
