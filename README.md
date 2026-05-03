@@ -5,16 +5,17 @@ Identidad de usuario y rating de peers compartidos entre las apps de Closer Clic
 ## Cómo funciona
 
 ```
-┌────────────────────┐    postMessage    ┌──────────────────────┐
-│  app (cualquier    │ ◀───────────────▶ │  vault iframe        │
-│  origin: chat,     │                   │  origin: id.closer   │
-│  qrshare, chess…)  │                   │  .click              │
-│                    │                   │  - keypair P-256     │
-│  import {Identity} │                   │  - peers (ratings)   │
-└────────────────────┘                   └──────────────────────┘
+┌────────────────────┐    postMessage    ┌────────────────────────┐
+│  app (cualquier    │ ◀───────────────▶ │  vault iframe          │
+│  origin: chat,     │                   │  origin: id.closer     │
+│  qrshare, chess…)  │                   │  .click                │
+│                    │                   │  - keypair ECDSA P-256 │
+│  import {Identity} │                   │  - keypair ECDH P-256  │
+└────────────────────┘                   │  - peers + ratings     │
+                                         └────────────────────────┘
 ```
 
-Como todas las apps cargan el vault desde el mismo origin, comparten el mismo `localStorage` aunque ellas estén en orígenes distintos. La clave privada nunca sale del vault.
+Como todas las apps cargan el vault desde el mismo origin, comparten el mismo `localStorage` aunque ellas estén en orígenes distintos. **Las claves privadas nunca salen del vault** — las apps reciben firmas (de la ECDSA) y plaintext descifrado (de la ECDH) pero nunca las llaves.
 
 ## Instalación
 
@@ -74,16 +75,29 @@ Inicializa el iframe y resuelve cuando el vault está listo.
 ### Handshake
 
 - `id.makeChallenge()`               → `{ nonce }`
-- `id.signChallenge(nonce)`          → `{ nonce, publickey, signature }`
-- `id.verifyResponse(response)`      → `{ ok, publickey?, peer? }`
+- `id.signChallenge(nonce)`          → `{ nonce, publickey, encryptionPubkey, signature }`
+- `id.verifyResponse(response)`      → `{ ok, publickey?, encryptionPubkey?, peer? }`
 
 ### Peer book
 
 - `id.getPeer(publickey)`
 - `id.setNickname(publickey, nickname)`
-- `id.setRating(publickey, rating, notes?)` (rating 0–5)
-- `id.listPeers()`
-- `id.forgetPeer(publickey)`
+- `id.setRating(publickey, rating, notes?)` — produce un envelope firmado y lo guarda como `peer.myRating` (rating 0–5).
+- `id.mergeEndorsements(subject, [signedRatings], askerPubkey?)` — para web-of-trust: valida firmas, dedupea por `(ratedBy, subject)`, cap 50.
+- `id.getRatingsForSubject(subject)` → `{ mine, endorsements }` para responder a un `RATING_QUERY`.
+- `id.recordQuery(askerPubkey, subject?)` — contabiliza consultas para el suspicion modifier.
+- `id.listPeers()`, `id.forgetPeer(publickey)`
+
+### Encripción E2E (0.5.0+)
+
+- `id.getEncryptionPubkey()` → JWK string del propio peer.
+- `id.encrypt(recipients, plaintext)` → `{v:1, iv, ct, wrap}` envelope. `recipients` = `[{token, encryptionPubkey}]`. AES-256-GCM con clave efímera por mensaje, envuelta para cada destinatario vía ECDH(P-256).
+- `id.decrypt(senderEncryptionPubkey, myToken, envelope)` → `{ plaintext }`. Forward-secrecy por mensaje (clave simétrica nueva cada vez).
+
+### Backup / migración
+
+- `id.exportIdentity()` → blob JSON con `privateJwk` (ECDSA), `encPrivateJwk` (ECDH), `me`, `peers`. **Sensible** — el host app es responsable de guardarlo de manera segura.
+- `id.importIdentity(blob)` → reemplaza la identidad local. Soporta blobs v1 (sin ECDH) y v2 (con ambas keys).
 
 ## Diseño
 
