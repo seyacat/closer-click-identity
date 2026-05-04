@@ -139,6 +139,31 @@ export class Identity {
   }
 
   /**
+   * Add (or refresh) a contact in the shared address book. Idempotent —
+   * existing peer records are upserted with the new metadata. Contacts are
+   * stored alongside the rating/endorsement record for the same pubkey, so
+   * any app in the ecosystem (chat, chess, messenger, …) sees the same list.
+   */
+  async addContact ({ publickey, nickname, encryptionPubkey, lastToken, notes } = {}) {
+    return this._call('addContact', { publickey, nickname, encryptionPubkey, lastToken, notes })
+  }
+
+  /** Patch contact metadata (nickname / lastToken / encryptionPubkey / contactNotes). */
+  async updateContact (publickey, patch) {
+    return this._call('updateContact', { publickey, patch })
+  }
+
+  /** Remove the `isContact` flag while preserving rating/endorsement history. */
+  async removeContact (publickey) {
+    return this._call('removeContact', { publickey })
+  }
+
+  /** List peers flagged as contacts, sorted by lastSeen desc. */
+  async listContacts () {
+    return this._call('listContacts')
+  }
+
+  /**
    * Merge endorsements (signed ratings from third parties) about a subject
    * into the local peer book. Returns { merged, total }.
    */

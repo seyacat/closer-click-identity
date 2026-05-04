@@ -90,6 +90,19 @@ export class Identity {
   setRating (publickey: string, rating: number, notes?: string): Promise<PeerInfo>
   listPeers (): Promise<PeerInfo[]>
   forgetPeer (publickey: string): Promise<void>
+  addContact (input: {
+    publickey: string
+    nickname?: string
+    encryptionPubkey?: string
+    lastToken?: string
+    notes?: string
+  }): Promise<PeerInfo>
+  updateContact (
+    publickey: string,
+    patch: Partial<{ nickname: string; encryptionPubkey: string; lastToken: string; contactNotes: string }>
+  ): Promise<PeerInfo | null>
+  removeContact (publickey: string): Promise<PeerInfo | null>
+  listContacts (): Promise<PeerInfo[]>
   setMyNickname (nickname: string): Promise<{ me: Me }>
   getEncryptionPubkey (): Promise<string>
   encrypt (recipients: EncryptRecipient[], plaintext: string): Promise<EnvelopeV1>

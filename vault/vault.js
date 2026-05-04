@@ -381,6 +381,49 @@ const handlers = {
     savePeers(peers)
   },
 
+  // ----- Contacts (shared address book across the ecosystem) -------------
+  // A "contact" is just a peer record with `isContact: true`. The peer's
+  // pubkey is its identity; tokens are ephemeral and live in `lastToken`.
+  // Contact metadata (nickname, encryptionPubkey, lastSeen) sits next to
+  // ratings and endorsements in the same record, so chess/chat/messenger
+  // all see the same address book.
+
+  async addContact ({ publickey, nickname, encryptionPubkey, lastToken, notes }) {
+    if (!publickey) throw new Error('publickey required')
+    const patch = { isContact: true }
+    if (nickname != null) patch.nickname = String(nickname).slice(0, 40)
+    if (encryptionPubkey) patch.encryptionPubkey = encryptionPubkey
+    if (lastToken) patch.lastToken = lastToken
+    if (notes != null) patch.contactNotes = String(notes).slice(0, 300)
+    return upsertPeer(publickey, patch)
+  },
+
+  async updateContact ({ publickey, patch }) {
+    if (!publickey) throw new Error('publickey required')
+    if (!patch || typeof patch !== 'object') return null
+    const allowed = {}
+    for (const k of ['nickname', 'encryptionPubkey', 'lastToken', 'contactNotes']) {
+      if (k in patch) allowed[k] = patch[k]
+    }
+    return upsertPeer(publickey, allowed)
+  },
+
+  async removeContact ({ publickey }) {
+    const peers = loadPeers()
+    const p = peers[publickey]
+    if (!p) return null
+    delete p.isContact
+    peers[publickey] = p
+    savePeers(peers)
+    return p
+  },
+
+  async listContacts () {
+    return Object.values(loadPeers())
+      .filter(p => p && p.isContact)
+      .sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0))
+  },
+
   async setMyNickname ({ nickname }) {
     const me = {
       publickey: publickeyJwkStr,
