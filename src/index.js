@@ -164,6 +164,16 @@ export class Identity {
   }
 
   /**
+   * Sign an arbitrary JSON-serializable payload with the vault's ECDSA key
+   * using canonical JSON encoding. Returns `{ signature, publickey }` —
+   * compatible with the proxy's `verifySignatureWithJWK` (used by
+   * `identify` to bind a stable pubkey to the proxy connection).
+   */
+  async signData (data) {
+    return this._call('signData', { data })
+  }
+
+  /**
    * Merge endorsements (signed ratings from third parties) about a subject
    * into the local peer book. Returns { merged, total }.
    */

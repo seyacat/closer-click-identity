@@ -103,6 +103,7 @@ export class Identity {
   ): Promise<PeerInfo | null>
   removeContact (publickey: string): Promise<PeerInfo | null>
   listContacts (): Promise<PeerInfo[]>
+  signData (data: any): Promise<{ signature: string; publickey: string }>
   setMyNickname (nickname: string): Promise<{ me: Me }>
   getEncryptionPubkey (): Promise<string>
   encrypt (recipients: EncryptRecipient[], plaintext: string): Promise<EnvelopeV1>

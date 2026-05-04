@@ -418,6 +418,21 @@ const handlers = {
     return p
   },
 
+  /**
+   * Sign an arbitrary JSON-serializable payload with the vault's ECDSA key,
+   * using the same canonical encoding the proxy expects. Returns a base64
+   * signature plus the signer pubkey so the caller can transport both.
+   *
+   * Main use case: building `identify` envelopes for the proxy's offline
+   * message queue, or any cross-app signed assertion.
+   */
+  async signData ({ data }) {
+    if (data == null) throw new Error('data required')
+    const bytes = new TextEncoder().encode(canonicalStringify(data))
+    const signature = await signBytes(keypair.privateKey, bytes)
+    return { signature, publickey: publickeyJwkStr }
+  },
+
   async listContacts () {
     return Object.values(loadPeers())
       .filter(p => p && p.isContact)
