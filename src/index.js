@@ -274,10 +274,17 @@ export class Identity {
       }, this.timeoutMs)
       this._pending.set(id, { resolve, reject, timer })
 
-      const targetOrigin = new URL(this.vaultUrl).origin
+      // Usamos targetOrigin='*' por compatibilidad: en algunos navegadores el
+      // origin que el browser asocia al postMessage SALIENTE no coincide con
+      // el de las respuestas (mismatch interno tras la navegación cross-origin
+      // del iframe), provocando rechazos espurios. El handler del lado padre
+      // sí filtra `event.source === iframe.contentWindow` y `_cci === true`,
+      // lo cual es la defensa real. El contenido de los mensajes salientes
+      // no contiene secretos (solo nombres de método y params); las claves
+      // privadas viven en el localStorage de la propia vault.
       this._iframe.contentWindow.postMessage(
         { _cci: true, type: 'request', id, method, params },
-        targetOrigin
+        '*'
       )
     })
   }
