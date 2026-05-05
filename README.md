@@ -88,11 +88,24 @@ Inicializa el iframe y resuelve cuando el vault está listo.
 - `id.recordQuery(askerPubkey, subject?)` — contabiliza consultas para el suspicion modifier.
 - `id.listPeers()`, `id.forgetPeer(publickey)`
 
+### Contactos compartidos (0.6.0+)
+
+Mismo registro de `peers` que arriba, pero filtrado por flag `isContact: true`. Cualquier app del ecosistema (chat, chess, messenger, extensión) puede añadir/leer contactos del mismo address book.
+
+- `id.addContact({ publickey, nickname?, encryptionPubkey?, lastToken?, notes? })`
+- `id.updateContact(publickey, patch)` — patch limitado a `nickname`, `encryptionPubkey`, `lastToken`, `contactNotes`.
+- `id.removeContact(publickey)` — quita el flag `isContact` pero conserva ratings/endorsements.
+- `id.listContacts()` → array filtrado, ordenado por `lastSeen` desc.
+
 ### Encripción E2E (0.5.0+)
 
 - `id.getEncryptionPubkey()` → JWK string del propio peer.
-- `id.encrypt(recipients, plaintext)` → `{v:1, iv, ct, wrap}` envelope. `recipients` = `[{token, encryptionPubkey}]`. AES-256-GCM con clave efímera por mensaje, envuelta para cada destinatario vía ECDH(P-256).
+- `id.encrypt(recipients, plaintext)` → `{v:1, iv, ct, wrap}` envelope. `recipients` = `[{token, encryptionPubkey}]`. AES-256-GCM con clave efímera por mensaje, envuelta para cada destinatario vía ECDH(P-256). El campo `token` puede ser cualquier identificador estable (en messenger se usa la pubkey del destinatario para sobrevivir cambios de token del proxy).
 - `id.decrypt(senderEncryptionPubkey, myToken, envelope)` → `{ plaintext }`. Forward-secrecy por mensaje (clave simétrica nueva cada vez).
+
+### Firma genérica (0.7.0+)
+
+- `id.signData(data)` → `{ signature, publickey }` con encoding canonical-JSON. Lo usa el messenger para construir sobres `identify` que el proxy verifica con su `verifySignatureWithJWK`.
 
 ### Backup / migración
 
