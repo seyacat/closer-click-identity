@@ -247,6 +247,54 @@ export class Identity {
     return result
   }
 
+  // ----- Auto-sync (Google Drive encrypted backup) -----
+
+  /**
+   * Connect a Google account for encrypted backup to Drive's appDataFolder.
+   * Pops up a Google sign-in window. `clientId` is your Google OAuth Web client ID
+   * with Authorized JavaScript Origin = the vault origin (id.closer.click).
+   */
+  async syncConnect (clientId) {
+    return this._call('syncConnect', { clientId })
+  }
+
+  async syncDisconnect () {
+    return this._call('syncDisconnect')
+  }
+
+  /**
+   * Unlock auto-sync by providing the passphrase used to encrypt the backup.
+   * Must be ≥ 8 chars. After unlock the sync engine pulls remote, merges,
+   * and pushes on every local change (debounced).
+   */
+  async syncUnlock (passphrase) {
+    return this._call('syncUnlock', { passphrase })
+  }
+
+  async syncLock () {
+    return this._call('syncLock')
+  }
+
+  /** { connected, unlocked, dirty, lastError } */
+  async syncStatus () {
+    return this._call('syncStatus')
+  }
+
+  /** Force an immediate pull-then-push cycle. */
+  async syncNow () {
+    return this._call('syncNow')
+  }
+
+  /**
+   * Subscribe to sync status events emitted by the vault. Handler receives
+   * `{ kind, status, error?, ts }` where status is one of
+   * 'connected' | 'disconnected' | 'unlocked' | 'locked' | 'syncing' |
+   * 'synced' | 'conflict' | 'offline' | 'error'.
+   */
+  onSync (handler) {
+    return this.on('sync', handler)
+  }
+
   on (event, handler) {
     if (!this._listeners) this._listeners = new Map()
     if (!this._listeners.has(event)) this._listeners.set(event, new Set())

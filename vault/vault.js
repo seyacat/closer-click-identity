@@ -6,6 +6,8 @@
  * its embedders via postMessage. The private key never leaves this page.
  */
 
+import { createSync } from './sync.js'
+
 const KEY_STORAGE = 'closer-click.identity.keypair'
 const ENC_KEY_STORAGE = 'closer-click.identity.enc-keypair'
 const ME_STORAGE  = 'closer-click.identity.me'
@@ -159,6 +161,7 @@ function loadPeers () {
 
 function savePeers (peers) {
   localStorage.setItem(PEERS_STORAGE, JSON.stringify(peers))
+  if (sync) sync.markDirty()
 }
 
 function upsertPeer (publickey, patch) {
@@ -212,6 +215,166 @@ function loadMe () {
 
 function saveMe (me) {
   localStorage.setItem(ME_STORAGE, JSON.stringify(me))
+  if (sync) sync.markDirty()
+}
+
+// ----- sync (Drive backup with passphrase + merge) -----
+
+let sync = null
+
+/**
+ * Verify a single endorsement envelope's ECDSA signature.
+ * Returns true if signature matches the canonical encoding for the given fields.
+ */
+async function verifyEndorsement (env) {
+  if (!env || typeof env !== 'object') return false
+  const { subject, rating, notes, ratedBy, issuedAt, signature } = env
+  if (typeof ratedBy !== 'string' || typeof signature !== 'string') return false
+  const canonical = canonicalStringify({
+    subject, rating, notes: typeof notes === 'string' ? notes : '', ratedBy, issuedAt
+  })
+  try {
+    return await verifyBytes(ratedBy, new TextEncoder().encode(canonical), signature)
+  } catch { return false }
+}
+
+/**
+ * Merge two peer maps. Local wins on conflicts where appropriate; signed
+ * objects (myRating, endorsements) are merged by signature timestamp.
+ */
+async function mergePeerMaps (localPeers, remotePeers) {
+  const out = { ...localPeers }
+  let changed = false
+  const allKeys = new Set([...Object.keys(localPeers || {}), ...Object.keys(remotePeers || {})])
+  for (const pk of allKeys) {
+    const a = localPeers[pk]
+    const b = remotePeers[pk]
+    if (a && !b) continue
+    if (!a && b) {
+      // Sanitize: only adopt if endorsements verify (cheap insurance).
+      const adopted = { ...b }
+      if (Array.isArray(adopted.endorsements)) {
+        const verified = []
+        for (const e of adopted.endorsements) {
+          if (await verifyEndorsement(e)) verified.push(e)
+        }
+        adopted.endorsements = verified
+      }
+      out[pk] = adopted
+      changed = true
+      continue
+    }
+    // both
+    const merged = { ...a }
+    // Last-writer-wins (by lastSeen) for free-form fields
+    const aSeen = a.lastSeen || 0
+    const bSeen = b.lastSeen || 0
+    const newer = bSeen > aSeen ? b : a
+    if (newer === b) {
+      if (b.nickname !== undefined) merged.nickname = b.nickname
+      if (b.notes !== undefined) merged.notes = b.notes
+      if (b.contactNotes !== undefined) merged.contactNotes = b.contactNotes
+      if (b.encryptionPubkey) merged.encryptionPubkey = b.encryptionPubkey
+      if (typeof b.rating === 'number') merged.rating = b.rating
+    }
+    merged.firstSeen = Math.min(a.firstSeen || aSeen || Date.now(), b.firstSeen || bSeen || Date.now())
+    merged.lastSeen = Math.max(aSeen, bSeen)
+    merged.isContact = !!(a.isContact || b.isContact)
+
+    // myRating: keep newer issuedAt
+    const aMine = a.myRating
+    const bMine = b.myRating
+    if (bMine && (!aMine || (bMine.issuedAt || 0) > (aMine.issuedAt || 0))) {
+      if (await verifyEndorsement(bMine)) merged.myRating = bMine
+    }
+
+    // endorsements: union dedup by ratedBy keeping newest issuedAt; verify
+    const byRater = new Map()
+    for (const e of (a.endorsements || [])) if (e?.ratedBy) byRater.set(e.ratedBy, e)
+    for (const e of (b.endorsements || [])) {
+      if (!e?.ratedBy) continue
+      const prev = byRater.get(e.ratedBy)
+      if (prev && (prev.issuedAt || 0) >= (e.issuedAt || 0)) continue
+      if (await verifyEndorsement(e)) byRater.set(e.ratedBy, e)
+    }
+    merged.endorsements = Array.from(byRater.values())
+      .sort((x, y) => (y.issuedAt || 0) - (x.issuedAt || 0)).slice(0, 50)
+
+    // queryStats: take max
+    if (a.queryStats || b.queryStats) {
+      merged.queryStats = {
+        queriesMade: Math.max(a.queryStats?.queriesMade || 0, b.queryStats?.queriesMade || 0),
+        queriesKnown: Math.max(a.queryStats?.queriesKnown || 0, b.queryStats?.queriesKnown || 0)
+      }
+    }
+
+    if (JSON.stringify(merged) !== JSON.stringify(a)) changed = true
+    out[pk] = merged
+  }
+  return { merged: out, changed }
+}
+
+async function exportLocalForSync () {
+  // Like exportIdentity but always returns a snapshot (no throw on missing keys).
+  const raw = localStorage.getItem(KEY_STORAGE)
+  const keys = raw ? JSON.parse(raw) : null
+  const encRaw = localStorage.getItem(ENC_KEY_STORAGE)
+  const encKeys = encRaw ? JSON.parse(encRaw) : null
+  return {
+    privateJwk: keys?.privateJwk || null,
+    publicJwk: keys?.publicJwk || null,
+    encPrivateJwk: encKeys?.privateJwk || null,
+    encPublicJwk: encKeys?.publicJwk || null,
+    me: loadMe(),
+    peers: loadPeers()
+  }
+}
+
+async function applyMergedFromSync (merged) {
+  const localKeys = localStorage.getItem(KEY_STORAGE)
+  // Adopt remote keypair only if local is empty (first setup on a new device).
+  if (!localKeys && merged.privateJwk && merged.publicJwk) {
+    localStorage.setItem(KEY_STORAGE, JSON.stringify({
+      privateJwk: merged.privateJwk, publicJwk: merged.publicJwk
+    }))
+    if (merged.encPrivateJwk && merged.encPublicJwk) {
+      localStorage.setItem(ENC_KEY_STORAGE, JSON.stringify({
+        privateJwk: merged.encPrivateJwk, publicJwk: merged.encPublicJwk
+      }))
+    }
+    keypair = await loadOrCreateKeypair()
+    publickeyJwkStr = JSON.stringify(keypair.publicJwk)
+    encKeypair = await loadOrCreateEncKeypair()
+    encPublickeyJwkStr = JSON.stringify(encKeypair.publicJwk)
+    if (merged.me) localStorage.setItem(ME_STORAGE, JSON.stringify(merged.me))
+  } else if (localKeys && merged.publicJwk) {
+    // Local has its own keypair: keep local keys but warn if remote differs.
+    const localPub = JSON.parse(localKeys).publicJwk
+    if (JSON.stringify(localPub) !== JSON.stringify(merged.publicJwk)) {
+      console.warn('[vault.sync] Remote keypair differs from local — keeping local keypair.')
+    }
+  }
+  if (merged.peers && typeof merged.peers === 'object') {
+    // Direct write (don't trigger markDirty during merge apply)
+    localStorage.setItem(PEERS_STORAGE, JSON.stringify(merged.peers))
+  }
+}
+
+async function mergeForSync (local, remote) {
+  if (!remote) return { merged: local, changed: false }
+  const { merged: mergedPeers, changed } = await mergePeerMaps(local.peers || {}, remote.peers || {})
+  return {
+    merged: {
+      // Local keys are authoritative once present; only fill gaps from remote.
+      privateJwk: local.privateJwk || remote.privateJwk,
+      publicJwk: local.publicJwk || remote.publicJwk,
+      encPrivateJwk: local.encPrivateJwk || remote.encPrivateJwk,
+      encPublicJwk: local.encPublicJwk || remote.encPublicJwk,
+      me: local.me || remote.me,
+      peers: mergedPeers
+    },
+    changed
+  }
 }
 
 // ----- handlers -----
@@ -562,6 +725,34 @@ const handlers = {
     }
   },
 
+  // ----- Drive sync (auto-merge backup) ----------------------------------
+
+  async syncConnect ({ clientId }) {
+    if (!sync) throw new Error('sync not ready')
+    return sync.connectGoogle(clientId)
+  },
+  async syncDisconnect () {
+    if (!sync) return
+    return sync.disconnectGoogle()
+  },
+  async syncUnlock ({ passphrase }) {
+    if (!sync) throw new Error('sync not ready')
+    return sync.unlock(passphrase)
+  },
+  async syncLock () {
+    if (!sync) return
+    return sync.lock()
+  },
+  async syncStatus () {
+    return sync ? sync.getStatus() : { connected: false, unlocked: false, dirty: false }
+  },
+  async syncNow () {
+    if (!sync) throw new Error('sync not ready')
+    await sync.pull()
+    await sync.push()
+    return sync.getStatus()
+  },
+
   async importIdentity ({ privateJwk, publicJwk, encPrivateJwk, encPublicJwk, me, peers }) {
     if (!privateJwk || !publicJwk) throw new Error('privateJwk and publicJwk required')
     // Validar la signing keypair importando.
@@ -640,6 +831,28 @@ const handlers = {
     me = { publickey: publickeyJwkStr, encryptionPubkey: encPublickeyJwkStr }
     saveMe(me)
   }
+
+  // Initialize sync controller
+  sync = createSync({
+    fileName: 'closerclick-identity-backup.json',
+    kind: 'identity',
+    exportLocal: exportLocalForSync,
+    applyMerged: applyMergedFromSync,
+    mergeFn: mergeForSync
+  })
+
+  // Broadcast status events to all embedders
+  const broadcastStatus = (payload) => {
+    for (const w of [window.parent, ...Array.from(document.querySelectorAll('iframe')).map(f => f.contentWindow)]) {
+      if (!w || w === window) continue
+      try { w.postMessage({ _cci: true, type: 'event', event: 'sync', payload }, '*') } catch {}
+    }
+    // Also notify parent (most common case)
+    if (window.parent && window.parent !== window) {
+      try { window.parent.postMessage({ _cci: true, type: 'event', event: 'sync', payload }, '*') } catch {}
+    }
+  }
+  sync.onStatus(broadcastStatus)
 
   window.addEventListener('message', async (event) => {
     const msg = event.data

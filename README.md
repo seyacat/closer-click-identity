@@ -112,6 +112,48 @@ Mismo registro de `peers` que arriba, pero filtrado por flag `isContact: true`. 
 - `id.exportIdentity()` → blob JSON con `privateJwk` (ECDSA), `encPrivateJwk` (ECDH), `me`, `peers`. **Sensible** — el host app es responsable de guardarlo de manera segura.
 - `id.importIdentity(blob)` → reemplaza la identidad local. Soporta blobs v1 (sin ECDH) y v2 (con ambas keys).
 
+### Auto-sync con Google Drive (0.8.0+)
+
+Backup automático y sincronización multi-dispositivo de la identidad (claves + contactos + ratings + endorsements) usando Google Drive como almacén opaco. **Google nunca ve tus datos en claro**: el blob se cifra en el navegador con AES-256-GCM y una clave derivada por PBKDF2 (600 000 iteraciones) de una passphrase elegida por el usuario.
+
+Topología:
+- El blob se guarda en la carpeta especial `appDataFolder` de Drive (oculta para el usuario, no contamina su Drive).
+- Scope OAuth requerido: solo `https://www.googleapis.com/auth/drive.appdata`.
+- El cliente OAuth (Google Cloud Console → Web application) debe tener `https://id.closer.click` (y/o `http://localhost:5173` para dev) como Authorized JavaScript Origin.
+- El sync corre **dentro del iframe del vault**: las claves privadas nunca cruzan el postMessage boundary.
+
+```js
+// 1. Conectar Google (popup OAuth, una vez por origen)
+await id.syncConnect('123456789-abc...apps.googleusercontent.com')
+
+// 2. Desbloquear con passphrase (≥12 chars). Se guarda en sessionStorage del vault
+//    (per-tab) y se borra al cerrar la pestaña.
+await id.syncUnlock('mi-passphrase-larga-y-secreta')
+
+// 3. A partir de aquí: pull-on-unlock + push debounced (5s) + pull periódico (2 min).
+//    Cualquier mutación local (setRating, addContact, mergeEndorsements...) marca
+//    dirty automáticamente.
+
+// Eventos de estado
+id.onSync(({ status, error }) => console.log('sync:', status, error || ''))
+// status: connected | unlocked | syncing | synced | conflict | offline | error | locked | disconnected
+
+// Forzar pull+push inmediato
+await id.syncNow()
+
+// Bloquear (limpia la passphrase de memoria)
+await id.syncLock()
+```
+
+**Estrategia de merge** (al hacer pull, si remoto tiene cambios):
+- Keypairs ECDSA/ECDH: **nunca se sobreescriben**. Solo se adopta el remoto si local está vacío (primer setup en device nuevo).
+- Contact metadata (nickname, notes, encryptionPubkey, rating): last-writer-wins por `lastSeen`.
+- `myRating`: el envelope firmado con mayor `issuedAt` gana.
+- `endorsements`: unión dedup por `ratedBy`; firmas re-verificadas antes de aceptar.
+- Concurrencia: optimistic-lock con `If-Match: <etag>` en Drive. Si 412, pull → merge → push (3 reintentos).
+
+**Trade-off**: si el usuario pierde la passphrase, el blob es irrecuperable. Es coherente con E2E — ni Google ni el desarrollador pueden recuperarlo.
+
 ## Diseño
 
 - **Una sola identidad por navegador**, persistente entre apps que apuntan al mismo vault.

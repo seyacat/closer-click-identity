@@ -123,5 +123,27 @@ export class Identity {
   recordQuery (askerPubkey: string, subject?: string): Promise<PeerInfo | null>
   exportIdentity (): Promise<IdentityExport>
   importIdentity (blob: IdentityExport | Record<string, any>): Promise<{ me: Me }>
-  on (event: 'peer_updated' | 'me_updated', handler: (payload: any) => void): () => void
+  syncConnect (clientId: string): Promise<{ accessToken: string; expiresAt: number }>
+  syncDisconnect (): Promise<void>
+  syncUnlock (passphrase: string): Promise<{ ok: boolean }>
+  syncLock (): Promise<void>
+  syncStatus (): Promise<SyncStatus>
+  syncNow (): Promise<SyncStatus>
+  onSync (handler: (event: SyncEvent) => void): () => void
+  on (event: 'peer_updated' | 'me_updated' | 'sync', handler: (payload: any) => void): () => void
+}
+
+export interface SyncStatus {
+  kind?: 'identity' | 'store'
+  connected: boolean
+  unlocked: boolean
+  dirty: boolean
+  lastError?: string | null
+}
+
+export interface SyncEvent {
+  kind: 'identity' | 'store'
+  status: 'connected' | 'disconnected' | 'unlocked' | 'locked' | 'syncing' | 'synced' | 'conflict' | 'offline' | 'error'
+  error?: string
+  ts: number
 }
